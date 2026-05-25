@@ -1,0 +1,26 @@
+
+# Claude Code Skills 精选
+
+> 来源: `raw/ai/skills.md`
+
+| Skill | 核心用途 | 安装命令 |
+|-------|---------|----------|
+| Planning with Files | 复杂任务持久化规划、进度跟踪，防止 AI 失忆 | `/plugin add` |
+| Web Interface Guidelines | Web 界面规范审查、无障碍/性能/响应式/深色模式校验 | `/plugin add` |
+| UI/UX Pro Max | 专业 UI/UX 生成，内置风格/配色/字体规范 | `/plugin add` |
+| Security Audit | 代码安全审计、OWASP 漏洞扫描、合规检查 | `/plugin add` |
+| Software Architecture | 软件架构设计、架构图、技术选型 | `/plugin add` |
+
+**其他推荐**: claude-mem, playwright-cli, superpowers
+
+---
+
+#### playwrightcli使用
+
+用playwrightcli参数--headed --persistent 查看https://detail.tmall.com/item.htm 保存成csv文件
+创建一个save_mall_comments skill，把刚才打开网站，查看评论，并且保存评论的全过程，遇到的坑都提炼出来保
+存到skill里面。把skill 放到目录下面
+
+阅读代码，把从注册开始的主体流程写一个中文的测试文档只测试主流程即可。然后用 playwright-cli open --headed --persistent 打开网页,根据你的测试用例，完成进行测试
+
+阅读代码，根据当前所有模块菜单写一个中文的测试文档测试页面和所有按钮。然后用 playwright-cli open --headed --persistent 打开网页,根据你的测试用例，完成进行测试,每个页面应该都有数据，如果列表数据为空或者表单数据为空，将问题和测试结果记录到md文件中
