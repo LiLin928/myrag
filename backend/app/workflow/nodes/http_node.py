@@ -8,7 +8,7 @@ import httpx
 import logging
 
 from app.workflow.nodes.base_node import BaseNode, NodeResult
-from app.workflow.langfuse_tracker import create_span, end_span
+from app.workflow.langfuse_tracker import create_span_direct, end_span
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ class HTTPNode(BaseNode):
         # 创建 Span（如果启用）
         span = None
         if settings.langfuse_available:
-            span = create_span(
+            span = create_span_direct(
                 trace_id=state.get("execution_id"),
                 node_type=self.node_type,
                 node_name=self.node_id,

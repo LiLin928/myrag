@@ -1,3 +1,9 @@
+# Windows asyncio 事件循环策略 - 必须在任何 async 导入之前设置
+import sys
+import asyncio
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from dotenv import load_dotenv
 
 # 加载 .env 文件（显式加载，确保环境变量正确）
@@ -10,6 +16,7 @@ import structlog
 
 from app.config import get_settings
 from app.api.routes import api_router
+from app.graphs.checkpointer import get_checkpointer, get_async_connection_pool
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -19,7 +26,28 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("Starting MyRAG application", env=settings.APP_ENV)
+
+    # 初始化 LangGraph checkpointer 表
+    try:
+        # 先打开连接池
+        pool = get_async_connection_pool()
+        await pool.open()
+        checkpointer = get_checkpointer()
+        await checkpointer.setup()
+        logger.info("LangGraph checkpointer tables initialized")
+    except Exception as e:
+        logger.warning(f"Checkpointer setup failed: {e}")
+
     yield
+
+    # 关闭连接池
+    try:
+        pool = get_async_connection_pool()
+        await pool.close()
+        logger.info("Connection pool closed")
+    except Exception as e:
+        logger.warning(f"Pool close failed: {e}")
+
     logger.info("Shutting down MyRAG application")
 
 

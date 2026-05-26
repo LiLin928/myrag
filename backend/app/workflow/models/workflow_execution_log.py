@@ -34,7 +34,7 @@ class WorkflowExecutionLog(Base):
     node_type = Column(String(32), nullable=True)
 
     # 事件信息
-    event_type = Column(Enum(LogEventType), nullable=False, index=True)
+    event_type = Column(String(20), nullable=False, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     # 执行数据

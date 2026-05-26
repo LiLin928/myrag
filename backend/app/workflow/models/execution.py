@@ -1,6 +1,6 @@
 """工作流执行记录模型"""
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -28,8 +28,8 @@ class WorkflowExecution(Base):
     workflow_id = Column(String(36), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
 
-    # 执行状态
-    status = Column(Enum(ExecutionStatus), default=ExecutionStatus.PENDING, index=True)
+    # 执行状态 - 使用 String 类型存储
+    status = Column(String(20), default="pending", nullable=False, index=True)
     thread_id = Column(String(64), nullable=False, unique=True)  # LangGraph thread ID
 
     # 执行追踪

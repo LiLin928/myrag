@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     SANDBOX_CPU_LIMIT: float = 0.5
     SANDBOX_MEMORY_LIMIT: str = "200m"
     SANDBOX_TIMEOUT: int = 30
+    SANDBOX_MODE: str = "server"  # "server" 使用远程 OpenSandbox SDK, "local" 使用本地 Python
+    SANDBOX_HOST: str = "192.168.137.13"  # 远程 OpenSandbox 服务器地址
+    SANDBOX_PORT: int = 8090  # OpenSandbox API 端口
+    SANDBOX_API_KEY: str = ""  # OpenSandbox API Key
+    SANDBOX_IMAGE: str = "python:3.11-slim"  # 沙箱镜像
 
     # 应用
     APP_ENV: str = "development"

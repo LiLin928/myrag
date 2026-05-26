@@ -9,7 +9,7 @@ import logging
 
 from app.workflow.nodes.base_node import BaseNode, NodeResult
 from app.workflow.sandbox.code_executor import get_code_executor
-from app.workflow.langfuse_tracker import create_span, end_span
+from app.workflow.langfuse_tracker import create_span_direct, end_span
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class CodeNode(BaseNode):
         # 创建 Span（如果启用）
         span = None
         if settings.langfuse_available:
-            span = create_span(
+            span = create_span_direct(
                 trace_id=state.get("execution_id"),
                 node_type=self.node_type,
                 node_name=self.node_id,
@@ -95,10 +95,14 @@ class CodeNode(BaseNode):
                 packages=packages,
             )
 
+            logger.info(f"CodeNode {self.node_id}: code_executor result = {result}")
+
             if result["success"]:
                 # 处理输出变量映射
                 output = result.get("output")
+                logger.info(f"CodeNode {self.node_id}: output = {output}")
                 output_variables = self._map_output_variables(output)
+                logger.info(f"CodeNode {self.node_id}: output_variables = {output_variables}")
 
                 # 结束 Span
                 if span:
@@ -158,8 +162,8 @@ class CodeNode(BaseNode):
 
         input_variables 格式:
         [
-            {"name": "input_data", "source": "node_1.output.result"},
-            {"name": "config", "source": "variables.config"},
+            {"name": "input_data", "source": "${node_id.result}"},
+            {"name": "config", "source": "${variables.config}"},
         ]
 
         Args:
@@ -170,6 +174,7 @@ class CodeNode(BaseNode):
         """
         input_variables_config = self.config.get("input_variables", [])
         if not input_variables_config:
+            logger.info(f"CodeNode {self.node_id}: no input_variables config")
             return {}
 
         resolved = {}
@@ -177,64 +182,99 @@ class CodeNode(BaseNode):
             var_name = var_config.get("name")
             source = var_config.get("source")
 
-            if not var_name or not source:
-                logger.warning(
-                    f"Invalid input variable config in node {self.node_id}: {var_config}"
-                )
+            if not var_name:
+                logger.warning(f"Invalid input variable config in node {self.node_id}: missing name")
                 continue
 
-            # 解析源路径
-            value = self._resolve_source_path(source, state)
+            if not source:
+                logger.warning(f"Invalid input variable config in node {self.node_id}: missing source for {var_name}")
+                continue
+
+            # 解析源路径（支持 ${node_id.output} 格式）
+            value = self._resolve_source_reference(source, state)
+            logger.info(f"CodeNode {self.node_id}: resolved {var_name} from {source} = {value}")
             resolved[var_name] = value
 
+        logger.info(f"CodeNode {self.node_id}: resolved input_variables = {resolved}")
         return resolved
 
-    def _resolve_source_path(self, source: str, state: Dict[str, Any]) -> Any:
-        """解析源路径
+    def _resolve_source_reference(self, source: str, state: Dict[str, Any]) -> Any:
+        """解析源引用
 
         支持格式:
-        - "variables.key" - 从全局变量获取
-        - "node_id.output.key" - 从节点输出获取
-        - "node_id.output" - 获取整个节点输出
+        - "${node_id.output}" - 节点输出引用（常用格式）
+        - "${node_id.output.key}" - 节点输出的嵌套字段
+        - "${variables.key}" - 全局变量引用
+        - "node_id.output.key" - 无$前缀格式（兼容旧配置）
+        - "variables.key" - 无$前缀格式（兼容旧配置）
 
         Args:
-            source: 源路径
+            source: 源引用字符串
             state: 工作流状态
 
         Returns:
             解析后的值
         """
-        parts = source.split(".")
-        if len(parts) < 2:
-            logger.warning(f"Invalid source path: {source}")
+        import re
+
+        # 处理 ${...} 格式的引用
+        match = re.match(r'\$\{([^}]+)\}', source)
+        if match:
+            var_path = match.group(1)
+            return self._resolve_var_path(var_path, state)
+
+        # 处理无$前缀的路径格式（兼容旧配置）
+        if '.' in source:
+            return self._resolve_var_path(source, state)
+
+        # 简单变量名，从全局变量获取
+        return state.get("variables", {}).get(source)
+
+    def _resolve_var_path(self, var_path: str, state: Dict[str, Any]) -> Any:
+        """解析变量路径
+
+        Args:
+            var_path: 变量路径（如 "start-1.question", "llm-1.result"）
+            state: 工作流状态
+
+        Returns:
+            解析后的值
+        """
+        parts = var_path.split('.', 1)
+
+        if len(parts) == 1:
+            # 简单变量名，从全局变量获取
+            return state.get("variables", {}).get(parts[0])
+
+        node_id, output_key = parts
+
+        # 特殊处理：从 variables 获取
+        if node_id == "variables":
+            return state.get("variables", {}).get(output_key)
+
+        # 特殊处理 start 节点 - 从 variables 获取
+        if node_id.startswith("start"):
+            variables = state.get("variables", {})
+            # 尝试多种可能的键名
+            value = variables.get(output_key) or \
+                    variables.get("question") or \
+                    variables.get("query") or \
+                    variables.get("input", {}).get(output_key)
+            return value
+
+        # 从节点输出获取
+        node_outputs = state.get("node_outputs", {})
+        node_output = node_outputs.get(node_id, {})
+
+        if not node_output:
+            logger.warning(f"CodeNode {self.node_id}: node output not found for {node_id}")
             return None
 
-        source_type = parts[0]
-
-        if source_type == "variables":
-            # 从全局变量获取
-            key = ".".join(parts[1:])
-            return self._extract_by_path(state.get("variables", {}), key)
-
-        elif source_type == "node_id":
-            # 从节点输出获取（格式: node_id.output.key）
-            if len(parts) < 3:
-                logger.warning(f"Invalid node output path: {source}")
-                return None
-
-            node_id = parts[1]
-            rest_path = ".".join(parts[2:])
-
-            node_output = self.get_previous_output(state, node_id)
-            if node_output is None:
-                logger.warning(f"Node output not found: {node_id}")
-                return None
-
-            return self._extract_by_path(node_output, rest_path)
-
+        # 解析嵌套路径
+        if '.' in output_key:
+            return self._extract_by_path(node_output, output_key)
         else:
-            logger.warning(f"Unknown source type: {source_type}")
-            return None
+            return node_output.get(output_key)
 
     def _inject_input_variables(self, code: str, input_variables: Dict[str, Any]) -> str:
         """注入输入变量到代码
@@ -248,19 +288,61 @@ class CodeNode(BaseNode):
         Returns:
             注入变量后的代码
         """
+        # 清理用户代码格式 - 移除开头的空格和多余缩进
+        # 首先移除开头的空格
+        cleaned_code = code.strip()
+        if cleaned_code.startswith(' ') or cleaned_code.startswith('\t'):
+            # 移除第一行的缩进
+            lines = cleaned_code.split('\n')
+            first_line = lines[0].strip()
+            # 计算第一行的缩进量，用于移除后续行的相同缩进
+            indent_count = 0
+            original_first_line = code.split('\n')[0] if code else ''
+            for char in original_first_line:
+                if char == ' ':
+                    indent_count += 1
+                elif char == '\t':
+                    indent_count += 4  # tab 算作 4 空格
+                else:
+                    break
+            # 移除所有行的多余缩进
+            cleaned_lines = []
+            for line in lines:
+                if line.startswith(' ') and len(line) > indent_count:
+                    # 移除多余的缩进，保留必要的缩进（减去第一行的多余空格）
+                    # 如果第一行有 6 个空格，后续行有 6 个空格的也要移除
+                    line_indent = 0
+                    for char in line:
+                        if char == ' ':
+                            line_indent += 1
+                        else:
+                            break
+                    # 保留代码本身的缩进结构（通常是 4 空格为一级）
+                    # 移除最外层的多余缩进
+                    if line_indent >= indent_count:
+                        cleaned_lines.append(line[indent_count:])
+                    else:
+                        cleaned_lines.append(line)
+                else:
+                    cleaned_lines.append(line)
+            cleaned_code = '\n'.join(cleaned_lines)
+
         # 生成变量注入代码
         inject_lines = ["import json", ""]
         for var_name, var_value in input_variables.items():
-            # 将值转换为 JSON 安全格式
-            value_json = json.dumps(var_value)
-            inject_lines.append(f"{var_name} = json.loads('{value_json}')")
+            # 将值转换为 JSON 字符串
+            value_json = json.dumps(var_value, ensure_ascii=False)
+            # 使用 repr() 安全地包裹 JSON 字符串，避免引号冲突
+            inject_lines.append(f'{var_name} = json.loads({repr(value_json)})')
 
         inject_lines.append("")
         inject_lines.append("# User code starts here")
 
         # 组合代码
         inject_code = "\n".join(inject_lines)
-        return f"{inject_code}\n{code}"
+        logger.info(f"CodeNode injected code:\n{inject_code}")
+        logger.info(f"CodeNode cleaned user code:\n{cleaned_code}")
+        return f"{inject_code}\n{cleaned_code}"
 
     def _map_output_variables(self, output: Any) -> Dict[str, Any]:
         """映射输出变量
@@ -291,7 +373,8 @@ class CodeNode(BaseNode):
         output_dict = output if isinstance(output, dict) else {"value": output}
 
         for var_config in output_variables_config:
-            source = var_config.get("source")
+            # 支持 source 和 path 两种字段名
+            source = var_config.get("source") or var_config.get("path")
             name = var_config.get("name")
 
             if not source or not name:

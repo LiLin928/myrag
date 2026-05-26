@@ -17,6 +17,8 @@ class CodeExecutor:
     def __init__(self):
         self.parser = ResultParser()
         self.pool = get_sandbox_pool()
+        import logging
+        self.logger = logging.getLogger(__name__)
 
     async def execute(
         self,
@@ -36,6 +38,8 @@ class CodeExecutor:
         """
         # 包装代码，捕获输出
         wrapped_code = self._wrap_code(code)
+        self.logger.info(f"CodeExecutor: wrapped code length={len(wrapped_code)}")
+        self.logger.info(f"CodeExecutor: wrapped code (first 300 chars): {wrapped_code[:300]}")
 
         # 执行
         raw_result = await self.pool.execute_code(
@@ -44,9 +48,23 @@ class CodeExecutor:
             packages=packages,
         )
 
+        self.logger.info(f"CodeExecutor: raw_result={raw_result}")
+
         # 解析结果
         if raw_result.get("success"):
-            parsed_result = self.parser.parse(raw_result.get("output", ""))
+            # 结果可能在 output 或 result 字段中
+            output_text = raw_result.get("output", "")
+            result_data = raw_result.get("result")
+
+            # 如果 output 为空但 result 有数据，使用 result
+            if output_text:
+                parsed_result = self.parser.parse(output_text)
+            elif result_data:
+                parsed_result = {"success": True, "output": result_data, "error": ""}
+            else:
+                parsed_result = {"success": False, "output": "", "error": "Empty output"}
+
+            self.logger.info(f"CodeExecutor: parsed_result={parsed_result}")
             return parsed_result
         else:
             return raw_result
@@ -74,14 +92,19 @@ class CodeExecutor:
         args_json = json.dumps(args or [])
         kwargs_json = json.dumps(kwargs or {})
 
-        call_code = f'''
+        # 使用字符串拼接代替 f-string
+        call_code = '''
 import json
 
-{function_code}
+__FUNCTION_CODE__
 
-result = {function_name}(*json.loads('{args_json}'), **json.loads('{kwargs_json}'))
+result = __FUNCTION_NAME__(*json.loads('__ARGS_JSON__'), **json.loads('__KWARGS_JSON__'))
 print(json.dumps({"success": True, "return_value": result}))
 '''
+        call_code = call_code.replace("__FUNCTION_CODE__", function_code)
+        call_code = call_code.replace("__FUNCTION_NAME__", function_name)
+        call_code = call_code.replace("__ARGS_JSON__", args_json)
+        call_code = call_code.replace("__KWARGS_JSON__", kwargs_json)
 
         return await self.execute(call_code, timeout)
 
@@ -103,20 +126,23 @@ print(json.dumps({"success": True, "return_value": result}))
         """
         context_json = json.dumps(context)
 
-        context_code = f'''
+        # 使用字符串拼接代替 f-string
+        context_code = '''
 import json
 
-_context = json.loads('{context_json}')
+_context = json.loads('__CONTEXT_JSON__')
 for key, value in _context.items():
     globals()[key] = value
 
-{code}
+__USER_CODE__
 '''
+        context_code = context_code.replace("__CONTEXT_JSON__", context_json)
+        context_code = context_code.replace("__USER_CODE__", code)
 
         return await self.execute(context_code, timeout)
 
     def _wrap_code(self, code: str) -> str:
-        """包装代码，捕获标准输出
+        """包装代码，捕获标准输出和执行结果
 
         Args:
             code: 原始代码
@@ -124,32 +150,56 @@ for key, value in _context.items():
         Returns:
             包装后的代码
         """
-        return f'''
+        # 清理用户代码的缩进问题
+        import textwrap
+        cleaned_code = textwrap.dedent(code.strip())
+
+        # 使用 repr() 安全地嵌入代码，避免三引号冲突
+        # 或者使用 base64 编码更安全
+        import base64
+        code_bytes = cleaned_code.encode('utf-8')
+        code_b64 = base64.b64encode(code_bytes).decode('utf-8')
+
+        # 包装器：解码并执行用户代码
+        wrapper = '''
 import sys
 import io
 import json
+import base64
 
-# 捕获标准输出
+# 保存原始 stdout
+_original_stdout = sys.stdout
+
+# 捕获标准输出（用于捕获用户代码的 print 输出）
 _stdout_capture = io.StringIO()
 sys.stdout = _stdout_capture
 
+# 解码并执行用户代码
+_user_code = base64.b64decode("__CODE_B64__").decode('utf-8')
 try:
-    {code}
-
-    output = _stdout_capture.getvalue()
-    print(json.dumps({
-        "success": True,
-        "output": output,
-        "error": None
-    }))
-
+    exec(_user_code, globals())
+    exec_error = None
 except Exception as e:
-    print(json.dumps({
-        "success": False,
-        "output": "",
-        "error": str(e)
-    }))
+    exec_error = str(e)
+
+# 恢复 stdout（必须在 print 结果之前恢复）
+sys.stdout = _original_stdout
+
+# 获取用户代码的输出
+_output = _stdout_capture.getvalue()
+
+# 尝试从 globals 获取 result（用户代码定义的）
+_result = globals().get('result', None)
+
+# 输出结果到原始 stdout
+print(json.dumps({
+    "success": exec_error is None,
+    "output": _output,
+    "result": _result,
+    "error": exec_error
+}))
 '''
+        return wrapper.replace('__CODE_B64__', code_b64)
 
     async def validate_code(self, code: str) -> Dict[str, Any]:
         """验证代码语法

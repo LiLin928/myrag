@@ -27,6 +27,8 @@ class HybridRetriever:
         self,
         knowledge_base_id: Optional[str] = None,  # 知识库 ID（推荐）
         project_id: Optional[int] = None,         # 项目 ID（向后兼容）
+        embedding_model: Optional[str] = None,    # embedding 模型名称
+        embedding_config: Optional[Any] = None,   # embedding 配置对象
         top_k: int = 5,
         score_threshold: float = 0.0,
         # 混合检索权重
@@ -38,6 +40,8 @@ class HybridRetriever:
         Args:
             knowledge_base_id: 知识库 ID（推荐使用）
             project_id: 项目 ID（向后兼容，已弃用）
+            embedding_model: embedding 模型名称
+            embedding_config: EmbeddingModelConfig 对象（完整配置）
             top_k: 返回结果数量
             score_threshold: 相似度阈值
             vector_weight: 向量检索权重（0-1）
@@ -53,14 +57,19 @@ class HybridRetriever:
 
         self.project_id = project_id
         self.knowledge_base_id = knowledge_base_id
+        self.embedding_model = embedding_model
+        self.embedding_config = embedding_config
         self.top_k = top_k
         self.score_threshold = score_threshold
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
 
-        # 向量检索器
+        # 向量检索器（传递 knowledge_base_id 和 embedding 配置）
         self.vector_retriever = PGVectorRetriever(
+            knowledge_base_id=knowledge_base_id,
             project_id=project_id,
+            embedding_model=embedding_model,
+            embedding_config=embedding_config,
             top_k=top_k * 2,  # 获取更多候选结果用于融合
             score_threshold=0.0,
         )
@@ -113,7 +122,11 @@ class HybridRetriever:
             filter_clauses = []
             params = {"query": query, "top_k": self.top_k * 2}
 
-            if self.project_id:
+            # 优先使用 knowledge_base_id（UUID 格式），其次使用 project_id
+            if self.knowledge_base_id:
+                filter_clauses.append("dc.knowledge_base_id = :knowledge_base_id")
+                params["knowledge_base_id"] = self.knowledge_base_id
+            elif self.project_id:
                 filter_clauses.append("dc.project_id = :project_id")
                 params["project_id"] = self.project_id
 
@@ -127,9 +140,9 @@ class HybridRetriever:
 
             where_clause = " AND ".join(filter_clauses) if filter_clauses else "TRUE"
 
-            # PostgreSQL 全文搜索
-            # 使用 to_tsvector 和 plainto_tsquery 实现中文分词搜索
-            sql = text(f"""
+            # PostgreSQL 全文搜索 - 使用 simple 配置（不需要中文分词扩展）
+            # 或者使用 ILIKE 进行简单的文本匹配
+            sql = text("""
                 SELECT
                     dc.id,
                     dc.content,
@@ -139,16 +152,13 @@ class HybridRetriever:
                     dc.page_number,
                     dc.document_id,
                     dc.chunk_metadata,
-                    ts_rank(
-                        to_tsvector('chinese', dc.content),
-                        plainto_tsquery('chinese', :query)
-                    ) as score
+                    CASE WHEN dc.content ILIKE '%' || :query || '%' THEN 1.0 ELSE 0.5 END as score
                 FROM document_chunks dc
-                WHERE to_tsvector('chinese', dc.content) @@ plainto_tsquery('chinese', :query)
+                WHERE dc.content ILIKE '%' || :query || '%'
                     AND {where_clause}
                 ORDER BY score DESC
                 LIMIT :top_k
-            """)
+            """.format(where_clause=where_clause))
 
             result = await db.execute(sql, params)
             rows = result.fetchall()

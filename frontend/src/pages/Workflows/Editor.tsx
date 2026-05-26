@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef } from 'react'
+import { useEffect, useCallback, useState, useRef, useMemo, useContext, createContext } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactFlow, {
   Node,
@@ -23,15 +23,62 @@ import ReactFlow, {
   ReactFlowProvider,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { Card, Button, Space, Form, Input, message, Drawer } from 'antd'
-import { SaveOutlined, PlayCircleOutlined, ArrowLeftOutlined } from '@ant-design/icons'
+import { Card, Button, Space, Form, Input, message, Drawer, Modal, Spin, Typography } from 'antd'
+import { SaveOutlined, PlayCircleOutlined, ArrowLeftOutlined, SendOutlined } from '@ant-design/icons'
 import { useWorkflowStore } from '../../stores/workflowStore'
 import { NodeConfigPanel } from '../../components/Workflow/NodeConfigPanel'
+import { workflowApi } from '../../api/workflows'
 
-// 自定义节点组件 - 横向布局
-function StartNode({ data: _data }: { data: any }) {
+const { TextArea } = Input
+const { Text } = Typography
+
+// 删除回调 Context
+const DeleteNodeContext = createContext<(id: string) => void>(() => {})
+
+// 删除按钮组件
+function DeleteButton({ id }: { id: string }) {
+  const onDelete = useContext(DeleteNodeContext)
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        onDelete(id)
+      }}
+      style={{
+        position: 'absolute',
+        top: -8,
+        right: -8,
+        width: 20,
+        height: 20,
+        borderRadius: '50%',
+        background: '#ff4d4f',
+        border: 'none',
+        cursor: 'pointer',
+        fontSize: 12,
+        color: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10,
+      }}
+      title="删除节点"
+    >
+      ×
+    </button>
+  )
+}
+
+// 自定义节点组件 - 使用正确的 NodeProps 类型
+interface CustomNodeProps {
+  id: string
+  data?: any
+  selected?: boolean
+}
+
+function StartNode({ id }: CustomNodeProps) {
   return (
     <div style={{
+      position: 'relative',
       padding: '10px 20px',
       background: '#52c41a',
       borderRadius: '50%',
@@ -40,13 +87,15 @@ function StartNode({ data: _data }: { data: any }) {
     }}>
       开始
       <Handle type="source" position={Position.Right} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function EndNode({ data: _data }: { data: any }) {
+function EndNode({ id }: CustomNodeProps) {
   return (
     <div style={{
+      position: 'relative',
       padding: '10px 20px',
       background: '#ff4d4f',
       borderRadius: '50%',
@@ -55,14 +104,16 @@ function EndNode({ data: _data }: { data: any }) {
     }}>
       结束
       <Handle type="target" position={Position.Left} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function LLMNode({ data }: { data: any }) {
+function LLMNode({ data, id }: CustomNodeProps) {
   const displayName = data?.model_name || '未配置'
   return (
     <div style={{
+      position: 'relative',
       padding: '12px',
       background: '#1890ff',
       borderRadius: '8px',
@@ -73,14 +124,16 @@ function LLMNode({ data }: { data: any }) {
       <div style={{ fontSize: 12 }}>{displayName}</div>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function RAGNode({ data }: { data: any }) {
+function RAGNode({ data, id }: CustomNodeProps) {
   const displayName = data?.knowledge_base_name || '未配置'
   return (
     <div style={{
+      position: 'relative',
       padding: '12px',
       background: '#722ed1',
       borderRadius: '8px',
@@ -91,13 +144,15 @@ function RAGNode({ data }: { data: any }) {
       <div style={{ fontSize: 12 }}>{displayName}</div>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function CodeNode({ data: _data }: { data: any }) {
+function CodeNode({ id }: CustomNodeProps) {
   return (
     <div style={{
+      position: 'relative',
       padding: '12px',
       background: '#13c2c2',
       borderRadius: '8px',
@@ -108,13 +163,15 @@ function CodeNode({ data: _data }: { data: any }) {
       <div style={{ fontSize: 12 }}>Python</div>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function ConditionNode({ data }: { data: any }) {
+function ConditionNode({ data, id }: CustomNodeProps) {
   return (
     <div style={{
+      position: 'relative',
       padding: '12px',
       background: '#faad14',
       borderRadius: '8px',
@@ -126,13 +183,15 @@ function ConditionNode({ data }: { data: any }) {
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} id="true" style={{ top: 20 }} />
       <Handle type="source" position={Position.Right} id="false" style={{ top: 50 }} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function HttpNode({ data }: { data: any }) {
+function HttpNode({ data, id }: CustomNodeProps) {
   return (
     <div style={{
+      position: 'relative',
       padding: '12px',
       background: '#eb2f96',
       borderRadius: '8px',
@@ -143,13 +202,15 @@ function HttpNode({ data }: { data: any }) {
       <div style={{ fontSize: 12 }}>{data?.url || '请求'}</div>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function HumanNode({ data: _data }: { data: any }) {
+function HumanNode({ id }: CustomNodeProps) {
   return (
     <div style={{
+      position: 'relative',
       padding: '12px',
       background: '#fa8c16',
       borderRadius: '8px',
@@ -160,13 +221,15 @@ function HumanNode({ data: _data }: { data: any }) {
       <div style={{ fontSize: 12 }}>审批节点</div>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-function ToolNode({ data }: { data: any }) {
+function ToolNode({ data, id }: CustomNodeProps) {
   return (
     <div style={{
+      position: 'relative',
       padding: '12px',
       background: '#874aaf',
       borderRadius: '8px',
@@ -177,20 +240,24 @@ function ToolNode({ data }: { data: any }) {
       <div style={{ fontSize: 12 }}>{data?.tool_name || '选择工具'}</div>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <DeleteButton id={id} />
     </div>
   )
 }
 
-const nodeTypes: NodeTypes = {
-  start: StartNode,
-  end: EndNode,
-  llm: LLMNode,
-  rag: RAGNode,
-  code: CodeNode,
-  condition: ConditionNode,
-  http: HttpNode,
-  human: HumanNode,
-  tool: ToolNode,
+// 创建动态节点类型（在 ReactFlowProvider 内部）
+function createNodeTypes(deleteNode: (id: string) => void): NodeTypes {
+  return {
+    start: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><StartNode {...props} /></DeleteNodeContext.Provider>,
+    end: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><EndNode {...props} /></DeleteNodeContext.Provider>,
+    llm: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><LLMNode {...props} /></DeleteNodeContext.Provider>,
+    rag: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><RAGNode {...props} /></DeleteNodeContext.Provider>,
+    code: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><CodeNode {...props} /></DeleteNodeContext.Provider>,
+    condition: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><ConditionNode {...props} /></DeleteNodeContext.Provider>,
+    http: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><HttpNode {...props} /></DeleteNodeContext.Provider>,
+    human: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><HumanNode {...props} /></DeleteNodeContext.Provider>,
+    tool: (props: any) => <DeleteNodeContext.Provider value={deleteNode}><ToolNode {...props} /></DeleteNodeContext.Provider>,
+  }
 }
 
 // 自定义边组件 - 带删除按钮
@@ -288,14 +355,35 @@ export function WorkflowEditor() {
     setNodes,
     setEdges,
     addNode,
+    setCurrent,
   } = useWorkflowStore()
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
 
+  // 测试对话框状态
+  const [testModalOpen, setTestModalOpen] = useState(false)
+  const [testInput, setTestInput] = useState('')
+  const [testExecuting, setTestExecuting] = useState(false)
+  const [testResult, setTestResult] = useState<string | null>(null)
+  const [testError, setTestError] = useState<string | null>(null)
+
+  // 计算 isNew 和 ref
   const isNew = id === 'new'
-  const initialized = useRef(false)
+  const workflowIdRef = useRef<string>(id || 'new')
+
+  // 当 id 变化时更新 ref
+  useEffect(() => {
+    workflowIdRef.current = id || 'new'
+  }, [id])
+
+  // 如果 id 为 undefined，重定向到列表页
+  useEffect(() => {
+    if (id === undefined) {
+      navigate('/workflows', { replace: true })
+    }
+  }, [id, navigate])
 
   // 监听边删除事件
   useEffect(() => {
@@ -309,15 +397,16 @@ export function WorkflowEditor() {
     }
   }, [edges, setEdges])
 
-  // 只在首次加载时初始化
+  // 根据路由参数初始化工作流
   useEffect(() => {
-    if (initialized.current) return
-    initialized.current = true
-
-    if (!isNew && id) {
+    console.log('Init useEffect, id:', id, 'isNew:', isNew)
+    if (id && id !== 'new') {
       fetchOne(id)
-    } else {
-      // 新建工作流初始化默认节点 - 横向布局
+    } else if (id === 'new') {
+      // 新建工作流：清空当前工作流数据和表单
+      console.log('Initializing default nodes for new workflow')
+      setCurrent(null)
+      form.resetFields()
       setNodes([
         { id: 'start-1', type: 'start', position: { x: 50, y: 250 }, data: {} },
         { id: 'end-1', type: 'end', position: { x: 600, y: 250 }, data: {} },
@@ -326,7 +415,12 @@ export function WorkflowEditor() {
         { id: 'e-start-end', source: 'start-1', target: 'end-1', ...defaultEdgeOptions },
       ])
     }
-  }, [id, isNew, fetchOne, setNodes, setEdges])
+  }, [id])
+
+  // 如果 id 为 undefined，显示加载状态（在所有 hooks 之后）
+  if (id === undefined) {
+    return <div style={{ textAlign: 'center', padding: 100 }}>跳转中...</div>
+  } // 只依赖 id，避免其他依赖导致的重复执行
 
   useEffect(() => {
     if (currentWorkflow) {
@@ -337,6 +431,18 @@ export function WorkflowEditor() {
       })
     }
   }, [currentWorkflow])
+
+  // 删除节点函数 - 使用 getState() 避免依赖变化
+  const deleteNode = useCallback((nodeId: string) => {
+    const { nodes, edges, setNodes, setEdges } = useWorkflowStore.getState()
+    // 删除节点及其相关的边
+    setNodes(nodes.filter((n) => n.id !== nodeId) as any)
+    setEdges(edges.filter((e) => e.source !== nodeId && e.target !== nodeId) as any)
+    message.success('节点已删除')
+  }, []) // 空依赖，函数引用稳定
+
+  // 动态创建 nodeTypes（包含删除回调）
+  const nodeTypes = useMemo(() => createNodeTypes(deleteNode), [deleteNode])
 
   // 处理节点变化（拖拽、删除等）
   const onNodesChange: OnNodesChange = useCallback(
@@ -382,15 +488,30 @@ export function WorkflowEditor() {
       setSaving(true)
 
       if (isNew) {
+        console.log('Creating new workflow with:', { name: values.name, description: values.description, definition: { nodes, edges } })
         const workflow = await create({
           name: values.name,
           description: values.description,
           definition: { nodes, edges },
         })
+        console.log('Created workflow:', workflow)
+        if (!workflow || !workflow.id) {
+          message.error('创建失败：未获取到工作流 ID')
+          console.error('Invalid workflow response:', workflow)
+          return
+        }
         message.success('创建成功')
+        // 立即更新 ref，避免 navigate 后的竞态条件
+        workflowIdRef.current = workflow.id
         navigate(`/workflows/${workflow.id}`)
       } else {
-        await update(id!, {
+        const currentId = workflowIdRef.current
+        console.log('Updating workflow, currentId:', currentId, 'isNew:', isNew, 'id:', id)
+        if (!currentId || currentId === 'new') {
+          message.error('工作流 ID 无效')
+          return
+        }
+        await update(currentId, {
           name: values.name,
           description: values.description,
           definition: { nodes, edges },
@@ -398,9 +519,50 @@ export function WorkflowEditor() {
         message.success('保存成功')
       }
     } catch (error: any) {
+      console.error('Save error:', error)
       message.error(error.message || '保存失败')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // 打开测试对话框
+  const handleOpenTest = () => {
+    setTestModalOpen(true)
+    setTestInput('')
+    setTestResult(null)
+    setTestError(null)
+  }
+
+  // 执行工作流测试
+  const handleTestExecute = async () => {
+    const currentId = workflowIdRef.current
+    if (!currentId || isNew || currentId === 'new') {
+      message.warning('请先保存工作流后再执行测试')
+      return
+    }
+    setTestExecuting(true)
+    setTestError(null)
+    setTestResult(null)
+
+    try {
+      // 先保存当前配置
+      const values = form.getFieldsValue()
+      await update(currentId, {
+        name: values.name,
+        description: values.description,
+        definition: { nodes, edges },
+      })
+
+      // 执行工作流 - 直接传递 query 变量，而不是嵌套在 input 中
+      const response = await workflowApi.execute(currentId, { query: testInput })
+
+      // 显示执行结果
+      setTestResult(JSON.stringify(response.data, null, 2))
+    } catch (error: any) {
+      setTestError(error.response?.data?.detail || error.message || '执行失败')
+    } finally {
+      setTestExecuting(false)
     }
   }
 
@@ -428,8 +590,8 @@ export function WorkflowEditor() {
           </Button>
           {isNew && <span style={{ color: '#999', marginLeft: 8 }}>保存后可执行</span>}
           {!isNew && (
-            <Button icon={<PlayCircleOutlined />} onClick={() => navigate(`/workflows/${id}/execute`)}>
-              执行
+            <Button icon={<PlayCircleOutlined />} onClick={handleOpenTest}>
+              测试
             </Button>
           )}
         </Space>
@@ -486,6 +648,7 @@ export function WorkflowEditor() {
           setSelectedNode(null)
         }}
         width={500}
+        destroyOnClose
       >
         <NodeConfigPanel
           selectedNode={selectedNode}
@@ -494,6 +657,54 @@ export function WorkflowEditor() {
           onConfigChange={handleConfigChange}
         />
       </Drawer>
+
+      {/* 测试对话框 */}
+      <Modal
+        title="工作流测试"
+        open={testModalOpen}
+        onCancel={() => setTestModalOpen(false)}
+        footer={null}
+        width={600}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <Text>输入测试数据：</Text>
+          <TextArea
+            rows={4}
+            value={testInput}
+            onChange={(e) => setTestInput(e.target.value)}
+            placeholder="输入测试内容..."
+            style={{ marginTop: 8 }}
+          />
+        </div>
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          onClick={handleTestExecute}
+          loading={testExecuting}
+          disabled={!testInput.trim()}
+        >
+          发送执行
+        </Button>
+
+        {testExecuting && (
+          <div style={{ marginTop: 16, textAlign: 'center' }}>
+            <Spin tip="正在执行工作流..." />
+          </div>
+        )}
+
+        {testError && (
+          <div style={{ marginTop: 16, padding: 12, background: '#fff2f0', borderRadius: 4, border: '1px solid #ffccc7' }}>
+            <Text type="danger">执行错误: {testError}</Text>
+          </div>
+        )}
+
+        {testResult && (
+          <div style={{ marginTop: 16, padding: 12, background: '#f6ffed', borderRadius: 4, border: '1px solid #b7eb8f' }}>
+            <Text strong>执行结果：</Text>
+            <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 12 }}>{testResult}</pre>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

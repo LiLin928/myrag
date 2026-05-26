@@ -16,6 +16,7 @@ export interface UpdateWorkflowRequest {
 
 export interface ExecuteWorkflowRequest {
   input?: Record<string, any>
+  query?: string  // 直接传递查询字符串，用于 RAG 检索
 }
 
 export interface WorkflowExecution {
@@ -59,32 +60,32 @@ export interface ExecutionHistoryParams {
 }
 
 export const workflowApi = {
-  list: () => apiClient.get<Workflow[]>('/workflows/'),
+  list: () => apiClient.get<Workflow[]>('/workflows'),
 
-  get: (id: string) => apiClient.get<Workflow>(`/workflows/${id}/`),
+  get: (id: string) => apiClient.get<Workflow>(`/workflows/${id}`),
 
-  create: (data: CreateWorkflowRequest) => apiClient.post<Workflow>('/workflows/', data),
+  create: (data: CreateWorkflowRequest) => apiClient.post<Workflow>('/workflows', data),
 
   update: (id: string, data: UpdateWorkflowRequest) =>
-    apiClient.put<Workflow>(`/workflows/${id}/`, data),
+    apiClient.put<Workflow>(`/workflows/${id}`, data),
 
-  delete: (id: string) => apiClient.delete(`/workflows/${id}/`),
+  delete: (id: string) => apiClient.delete(`/workflows/${id}`),
 
   execute: (id: string, data: ExecuteWorkflowRequest) =>
-    apiClient.post<WorkflowExecution>(`/workflows/${id}/execute/`, data),
+    apiClient.post<WorkflowExecution>(`/workflows/${id}/execute`, data),
 
   getExecutions: (id: string) =>
-    apiClient.get<WorkflowExecution[]>(`/workflows/${id}/executions/`),
+    apiClient.get<WorkflowExecution[]>(`/workflows/${id}/executions`),
 
   getExecution: (workflowId: string, executionId: string) =>
-    apiClient.get<WorkflowExecution>(`/workflows/${workflowId}/executions/${executionId}/`),
+    apiClient.get<WorkflowExecution>(`/workflows/${workflowId}/executions/${executionId}`),
 
   listExecutions: (params: ExecutionHistoryParams) =>
     apiClient.get<ExecutionHistoryResponse>('/workflows/executions', { params }),
 
   deleteExecution: (executionId: string) =>
-    apiClient.delete(`/workflows/executions/${executionId}/`),
+    apiClient.delete(`/workflows/executions/${executionId}`),
 
   rerunExecution: (executionId: string) =>
-    apiClient.post<{ execution_id: string; message: string }>(`/workflows/executions/${executionId}/rerun/`),
+    apiClient.post<{ execution_id: string; message: string }>(`/workflows/executions/${executionId}/rerun`),
 }

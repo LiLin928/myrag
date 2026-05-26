@@ -69,7 +69,3 @@ Thumbs.db
 *.key
 credentials.json
 secrets.json
-
-.superpowers/
-docs/
-.playwright-cli/

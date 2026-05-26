@@ -36,10 +36,14 @@ class HttpToolExecutor:
         retry_config = config.get("retry", {})
         output_mapping = config.get("output_mapping", {})
 
+        logger.info(f"HttpToolExecutor 配置: url_template={url_template}, method={method}, input_data={input_data}")
+
         # 渲染模板
         url = self._render_template(url_template, input_data)
         headers = self._render_headers(headers_template, input_data, auth_config)
         body = self._render_body(body_template, input_data) if body_template else None
+
+        logger.info(f"HttpToolExecutor 渲染后: url={url}, headers={headers}, body={body}")
 
         # 重试配置
         max_retries = retry_config.get("max_retries", 0)
@@ -93,6 +97,7 @@ class HttpToolExecutor:
         timeout: int,
     ) -> Dict[str, Any]:
         """发送 HTTP 请求"""
+        logger.info(f"_send_request: url={url}, method={method}, headers={headers}")
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(
                 method=method,
@@ -100,6 +105,8 @@ class HttpToolExecutor:
                 headers=headers,
                 json=body if method in ["POST", "PUT", "PATCH"] and body else None,
             )
+
+            logger.info(f"_send_request 响应: status={response.status_code}")
 
             # 解析响应
             content_type = response.headers.get("content-type", "")

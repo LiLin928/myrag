@@ -1,6 +1,6 @@
 """工作流定义模型"""
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -29,7 +29,8 @@ class Workflow(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     version = Column(String(20), default="1.0.0")
-    status = Column(Enum(WorkflowStatus), default=WorkflowStatus.DRAFT, index=True)
+    # 使用 String 类型存储状态值，而不是 PostgreSQL ENUM
+    status = Column(String(20), default="draft", nullable=False, index=True)
 
     # 工作流定义（JSON）
     definition = Column(JSON, nullable=True)  # nodes, edges, variables

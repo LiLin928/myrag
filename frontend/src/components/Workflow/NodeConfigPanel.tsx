@@ -12,11 +12,11 @@ import {
   Alert,
   Switch,
   Checkbox,
+  Radio,
   message,
 } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { Node, Edge } from 'reactflow'
-import type { CommonNodeConfig } from '../../types/workflowConfig'
 import type { Tool, KnowledgeBase } from '../../types/models'
 import { toolApi } from '../../api/tools'
 import { modelApi, ModelConfig } from '../../api/models'
@@ -26,6 +26,12 @@ const { TextArea } = Input
 
 // 上游输出参数 Context
 const UpstreamOutputsContext = createContext<{ name: string; path: string }[]>([])
+
+// 所有节点输出参数 Context（用于结束节点等）
+const AllNodesOutputsContext = createContext<{ name: string; path: string }[]>([])
+
+// 下游节点 Context（用于条件节点的目标节点选择）
+const DownstreamNodesContext = createContext<{ id: string; name: string; type: string }[]>([])
 
 // 节点类型名称映射
 const nodeTypeNames: Record<string, string> = {
@@ -46,6 +52,14 @@ function getUpstreamNodes(currentNodeId: string, nodes: Node[], edges: Edge[]): 
     .filter((e) => e.target === currentNodeId)
     .map((e) => e.source)
   return nodes.filter((n) => upstreamIds.includes(n.id))
+}
+
+// 获取下游节点（通过边连接的后续节点）
+function getDownstreamNodes(currentNodeId: string, nodes: Node[], edges: Edge[]): Node[] {
+  const downstreamIds = edges
+    .filter((e) => e.source === currentNodeId)
+    .map((e) => e.target)
+  return nodes.filter((n) => downstreamIds.includes(n.id))
 }
 
 // 获取节点的输出参数列表
@@ -117,19 +131,47 @@ export function NodeConfigPanel({ selectedNode, nodes, edges, onConfigChange }: 
     return upstreamNodes.flatMap((n) => getNodeOutputParams(n))
   }, [selectedNode, nodes, edges])
 
+  // 获取下游节点（用于条件节点的目标选择）
+  const downstreamNodes = useMemo(() => {
+    if (!selectedNode) return []
+    const downstreamNodesList = getDownstreamNodes(selectedNode.id, nodes, edges)
+    return downstreamNodesList.map((n) => ({
+      id: n.id,
+      name: n.data?.name || nodeTypeNames[n.type || ''] || n.id,
+      type: n.type || '',
+    }))
+  }, [selectedNode, nodes, edges])
+
+  // 获取所有节点的输出参数（用于结束节点等）
+  const allNodesOutputs = useMemo(() => {
+    if (!selectedNode) return []
+    // 获取除当前节点外的所有节点（排除 start 和 end 类型）
+    const otherNodes = nodes.filter(
+      (n) => n.id !== selectedNode.id && n.type !== 'end' && n.type !== 'start'
+    )
+    return otherNodes.flatMap((n) => getNodeOutputParams(n))
+  }, [selectedNode, nodes])
+
   // Initialize form when node selection changes
   useEffect(() => {
     if (selectedNode) {
       const data = selectedNode.data || {}
+      // 先重置表单，再设置新值，确保清除旧数据
+      form.resetFields()
       form.setFieldsValue(data)
       setInitialData(data)
       setHasChanges(false)
+    } else {
+      // 当没有选中节点时，重置表单
+      form.resetFields()
+      setInitialData({})
+      setHasChanges(false)
     }
-  }, [selectedNode, form])
+  }, [selectedNode?.id, form])
 
   // Handle form value changes
   const handleValuesChange = useCallback(
-    (_changedValues: Partial<CommonNodeConfig>, allValues: Record<string, unknown>) => {
+    () => {
       setHasChanges(true)
     },
     []
@@ -155,13 +197,15 @@ export function NodeConfigPanel({ selectedNode, nodes, edges, onConfigChange }: 
   const nodeType = selectedNode.type
 
   return (
-    <UpstreamOutputsContext.Provider value={upstreamOutputs}>
-      <Form
-        form={form}
-        layout="vertical"
-        onValuesChange={handleValuesChange}
-        initialValues={selectedNode.data || {}}
-      >
+    <AllNodesOutputsContext.Provider value={allNodesOutputs}>
+      <UpstreamOutputsContext.Provider value={upstreamOutputs}>
+        <DownstreamNodesContext.Provider value={downstreamNodes}>
+          <Form
+            form={form}
+            layout="vertical"
+            onValuesChange={handleValuesChange}
+            initialValues={selectedNode.data || {}}
+          >
         {/* Common Configuration Section - 默认折叠 */}
         <Collapse style={{ marginBottom: 16 }}>
           <Collapse.Panel header="基本配置（可选）" key="common">
@@ -221,30 +265,9 @@ export function NodeConfigPanel({ selectedNode, nodes, edges, onConfigChange }: 
         </Button>
       </Space>
     </Form>
-    </UpstreamOutputsContext.Provider>
-  )
-}
-
-// ============================================================================
-// 输入参数选择组件 - 从上游节点输出参数中选择
-// ============================================================================
-
-function InputParamSelector({ label, placeholder }: { label: string; placeholder?: string }) {
-  const upstreamOutputs = useContext(UpstreamOutputsContext)
-
-  return (
-    <Form.Item name={label} label={label}>
-      <Select
-        placeholder={placeholder || '选择输入参数'}
-        showSearch
-        optionFilterProp="label"
-        options={upstreamOutputs.map((p) => ({
-          value: `\${${p.path}}`,
-          label: p.name,
-        }))}
-        allowClear
-      />
-    </Form.Item>
+        </DownstreamNodesContext.Provider>
+      </UpstreamOutputsContext.Provider>
+    </AllNodesOutputsContext.Provider>
   )
 }
 
@@ -300,7 +323,6 @@ function LLMConfigSection() {
   const [tools, setTools] = useState<Tool[]>([])
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
-  const [loadingTools, setLoadingTools] = useState(false)
   const [loadingKnowledge, setLoadingKnowledge] = useState(false)
   const form = Form.useFormInstance()
 
@@ -331,7 +353,6 @@ function LLMConfigSection() {
   // 加载工具列表
   useEffect(() => {
     let isMounted = true
-    setLoadingTools(true)
     toolApi.available()
       .then((res) => {
         if (isMounted) {
@@ -342,11 +363,6 @@ function LLMConfigSection() {
         if (isMounted) {
           console.error('Failed to load tools:', error)
           setTools([])
-        }
-      })
-      .finally(() => {
-        if (isMounted) {
-          setLoadingTools(false)
         }
       })
     return () => { isMounted = false }
@@ -502,6 +518,7 @@ function RAGConfigSection() {
   const upstreamOutputs = useContext(UpstreamOutputsContext)
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [loading, setLoading] = useState(false)
+  const form = Form.useFormInstance()
 
   useEffect(() => {
     let isMounted = true
@@ -531,24 +548,44 @@ function RAGConfigSection() {
       <Collapse.Panel header="知识检索配置" key="rag">
         <Divider>输入参数</Divider>
 
-        {upstreamOutputs.length > 0 ? (
-          <>
-            <Form.Item name="query_source" label="查询文本来源">
-              <Select
-                placeholder="选择查询参数来源"
-                showSearch
-                optionFilterProp="label"
-                options={upstreamOutputs.map((p) => ({
-                  value: `\${${p.path}}`,
-                  label: p.name,
-                }))}
-                allowClear
-              />
-            </Form.Item>
-          </>
-        ) : (
-          <Alert message="请先连接上游节点以选择输入参数" type="info" style={{ marginBottom: 16 }} />
+        {/* 查询来源配置 - 支持两种模式 */}
+        <Form.Item label="查询来源模式">
+          <Radio.Group defaultValue="select" onChange={(e) => {
+            // 切换模式时清除相关字段
+            if (e.target.value === 'select') {
+              form.setFieldValue('query', undefined)
+            } else {
+              form.setFieldValue('query_source', undefined)
+            }
+          }}>
+            <Radio value="select">从上游节点选择</Radio>
+            <Radio value="custom">手动输入</Radio>
+          </Radio.Group>
+        </Form.Item>
+
+        {/* 模式1：从上游选择 */}
+        {upstreamOutputs.length > 0 && (
+          <Form.Item name="query_source" label="选择上游输出">
+            <Select
+              placeholder="选择查询参数来源"
+              showSearch
+              optionFilterProp="label"
+              options={upstreamOutputs.map((p) => ({
+                value: `\${${p.path}}`,
+                label: p.name,
+              }))}
+              allowClear
+            />
+          </Form.Item>
         )}
+
+        {/* 模式2：手动输入 */}
+        <Form.Item name="query" label="查询文本">
+          <TextArea
+            rows={2}
+            placeholder="输入查询文本，或使用 ${变量名} 引用变量"
+          />
+        </Form.Item>
 
         <Divider>知识库配置</Divider>
 
@@ -605,6 +642,8 @@ function RAGConfigSection() {
 // ============================================================================
 
 function CodeConfigSection() {
+  const upstreamOutputs = useContext(UpstreamOutputsContext)
+
   return (
     <Collapse defaultActiveKey={['code']} style={{ marginBottom: 16 }}>
       <Collapse.Panel header="代码配置" key="code">
@@ -626,7 +665,11 @@ function CodeConfigSection() {
           />
         </Form.Item>
         <Divider>输入变量</Divider>
-        <InputVariablesEditor />
+        {upstreamOutputs.length > 0 ? (
+          <InputVariablesEditorWithSelector />
+        ) : (
+          <Alert message="请先连接上游节点以选择输入参数" type="info" style={{ marginBottom: 16 }} />
+        )}
         <Divider>输出变量</Divider>
         <OutputVariablesEditor />
       </Collapse.Panel>
@@ -684,6 +727,7 @@ function HTTPConfigSection() {
 // ============================================================================
 
 function ToolConfigSection() {
+  const upstreamOutputs = useContext(UpstreamOutputsContext)
   const [tools, setTools] = useState<Tool[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null)
@@ -775,39 +819,17 @@ function ToolConfigSection() {
             {inputFields.length > 0 && (
               <>
                 <Divider>工具输入参数</Divider>
+                <Alert
+                  message="提示：可选择上游节点输出或手动输入自定义值"
+                  type="info"
+                  style={{ marginBottom: 12, fontSize: 12 }}
+                />
                 {inputFields.map((field) => (
-                  <Form.Item
+                  <ToolInputFieldWithSelector
                     key={field.name}
-                    name={['tool_inputs', field.name]}
-                    label={field.label}
-                    required={field.required}
-                    help={field.description}
-                  >
-                    {field.enum ? (
-                      <Select
-                        placeholder={`选择 ${field.label}`}
-                        options={field.enum.map((v: string) => ({
-                          value: v,
-                          label: v,
-                        }))}
-                      />
-                    ) : field.type === 'number' || field.type === 'integer' ? (
-                      <InputNumber
-                        placeholder={`输入 ${field.label}`}
-                        style={{ width: '100%' }}
-                      />
-                    ) : field.type === 'boolean' ? (
-                      <Select
-                        placeholder={`选择 ${field.label}`}
-                        options={[
-                          { value: true, label: '是' },
-                          { value: false, label: '否' },
-                        ]}
-                      />
-                    ) : (
-                      <Input placeholder={`输入 ${field.label}`} />
-                    )}
-                  </Form.Item>
+                    field={field}
+                    upstreamOutputs={upstreamOutputs}
+                  />
                 ))}
               </>
             )}
@@ -820,6 +842,114 @@ function ToolConfigSection() {
         )}
       </Collapse.Panel>
     </Collapse>
+  )
+}
+
+// ============================================================================
+// Tool Input Field with Selector - 支持选择上游输出或自定义输入
+// ============================================================================
+
+interface ToolInputFieldProps {
+  field: {
+    name: string
+    label: string
+    type: string
+    description: string
+    required: boolean
+    enum?: string[]
+  }
+  upstreamOutputs: { name: string; path: string }[]
+}
+
+function ToolInputFieldWithSelector({ field, upstreamOutputs }: ToolInputFieldProps) {
+  const [inputMode, setInputMode] = useState<'custom' | 'select'>('custom')
+  const form = Form.useFormInstance()
+
+  // 合并上游输出选项和自定义输入选项
+  const selectOptions = useMemo(() => {
+    // 上游节点输出选项
+    const upstreamOptions = upstreamOutputs.map((p) => ({
+      value: `\${${p.path}}`,
+      label: `↑ ${p.name}`,
+      type: 'upstream' as const,
+    }))
+    // 如果有枚举值，添加枚举选项
+    if (field.enum) {
+      const enumOptions = field.enum.map((v) => ({
+        value: v,
+        label: v,
+        type: 'enum' as const,
+      }))
+      return [...enumOptions, ...upstreamOptions]
+    }
+    return upstreamOptions
+  }, [upstreamOutputs, field.enum])
+
+  // 切换输入模式时清空当前值
+  const handleModeChange = (mode: 'custom' | 'select') => {
+    setInputMode(mode)
+    form.setFieldValue(['tool_inputs', field.name], undefined)
+  }
+
+  return (
+    <div style={{ marginBottom: 12, padding: 8, background: '#fafafa', borderRadius: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ fontWeight: 500 }}>
+          {field.label}
+          {field.required && <span style={{ color: '#ff4d4f', marginLeft: 4 }}>*</span>}
+        </span>
+        <Radio.Group
+          value={inputMode}
+          onChange={(e) => handleModeChange(e.target.value)}
+          size="small"
+          optionType="button"
+        >
+          <Radio.Button value="custom">自定义</Radio.Button>
+          <Radio.Button value="select">选择</Radio.Button>
+        </Radio.Group>
+      </div>
+
+      {field.description && (
+        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{field.description}</div>
+      )}
+
+      <Form.Item
+        name={['tool_inputs', field.name]}
+        rules={field.required ? [{ required: true, message: `请输入或选择 ${field.label}` }] : undefined}
+        style={{ marginBottom: 0 }}
+      >
+        {inputMode === 'custom' ? (
+          // 自定义输入模式
+          field.enum ? (
+            <Select
+              placeholder={`选择 ${field.label}`}
+              options={field.enum.map((v) => ({ value: v, label: v }))}
+              style={{ width: '100%' }}
+            />
+          ) : field.type === 'number' || field.type === 'integer' ? (
+            <InputNumber placeholder={`输入 ${field.label}`} style={{ width: '100%' }} />
+          ) : field.type === 'boolean' ? (
+            <Select
+              placeholder={`选择 ${field.label}`}
+              options={[{ value: true, label: '是' }, { value: false, label: '否' }]}
+              style={{ width: '100%' }}
+            />
+          ) : (
+            <Input placeholder={`输入 ${field.label}`} />
+          )
+        ) : (
+          // 选择模式：从上游输出或枚举中选择
+          <Select
+            placeholder="选择参数来源"
+            showSearch
+            optionFilterProp="label"
+            options={selectOptions}
+            style={{ width: '100%' }}
+            allowClear
+          />
+        )}
+      </Form.Item>
+    </div>
   )
 }
 
@@ -983,12 +1113,12 @@ function StartConfigSection() {
 // ============================================================================
 
 function EndConfigSection() {
-  const upstreamOutputs = useContext(UpstreamOutputsContext)
+  const allNodesOutputs = useContext(AllNodesOutputsContext)
 
   return (
     <Collapse defaultActiveKey={['end']} style={{ marginBottom: 16 }}>
       <Collapse.Panel header="输出变量定义" key="end">
-        {upstreamOutputs.length > 0 ? (
+        {allNodesOutputs.length > 0 ? (
           <Form.List name="output_variables">
             {(fields, { add, remove }) => (
               <>
@@ -1012,7 +1142,7 @@ function EndConfigSection() {
                           placeholder="选择来源"
                           showSearch
                           optionFilterProp="label"
-                          options={upstreamOutputs.map((p) => ({
+                          options={allNodesOutputs.map((p) => ({
                             value: `\${${p.path}}`,
                             label: p.name,
                           }))}
@@ -1030,7 +1160,7 @@ function EndConfigSection() {
             )}
           </Form.List>
         ) : (
-          <Alert message="请先连接上游节点以选择输出参数" type="info" style={{ marginBottom: 16 }} />
+          <Alert message="请先添加其他节点以选择输出参数" type="info" style={{ marginBottom: 16 }} />
         )}
       </Collapse.Panel>
     </Collapse>
@@ -1075,40 +1205,3 @@ function OutputVariablesEditor() {
   )
 }
 
-// ============================================================================
-// Input Variables Editor Component
-// ============================================================================
-
-function InputVariablesEditor() {
-  return (
-    <Form.List name="input_variables">
-      {(fields, { add, remove }) => (
-        <>
-          {fields.map(({ key, name, ...restField }) => (
-            <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
-              <Form.Item
-                {...restField}
-                name={[name, 'name']}
-                rules={[{ required: true, message: '请输入变量名' }]}
-                style={{ flex: 1 }}
-              >
-                <Input placeholder="参数名" />
-              </Form.Item>
-              <Form.Item
-                {...restField}
-                name={[name, 'source']}
-                style={{ flex: 1 }}
-              >
-                <Input placeholder="来源变量 ${节点.output.字段}" />
-              </Form.Item>
-              <Button type="text" danger icon={<DeleteOutlined />} onClick={() => remove(name)} />
-            </Space>
-          ))}
-          <Button type="dashed" onClick={() => add({ name: '', source: '' })} block icon={<PlusOutlined />}>
-            添加输入变量
-          </Button>
-        </>
-      )}
-    </Form.List>
-  )
-}

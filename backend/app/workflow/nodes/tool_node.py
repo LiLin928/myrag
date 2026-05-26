@@ -8,7 +8,7 @@ from app.workflow.nodes.base_node import BaseNode, NodeResult
 from app.tools.tool_registry import tool_registry
 from app.services.tool_service import tool_service
 from app.db import async_session_factory
-from app.workflow.langfuse_tracker import create_span, end_span
+from app.workflow.langfuse_tracker import create_span_direct, end_span
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class ToolNode(BaseNode):
         # 创建 Span（如果启用）
         span = None
         if settings.langfuse_available:
-            span = create_span(
+            span = create_span_direct(
                 trace_id=state.get("execution_id"),
                 node_type=self.node_type,
                 node_name=self.node_id,
@@ -156,7 +156,10 @@ class ToolNode(BaseNode):
     def _build_input_data(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """构建工具输入数据
 
-        根据 input_mapping 配置，从状态中提取并映射输入参数
+        支持多种配置格式:
+        - tool_inputs: 前端节点配置面板传入的参数
+        - input_mapping: 参数映射配置
+        - args: 兼容旧格式
 
         Args:
             state: 工作流状态
@@ -164,20 +167,73 @@ class ToolNode(BaseNode):
         Returns:
             构建好的输入数据字典
         """
-        input_mapping = self.config.get("input_mapping", {})
         input_data = {}
 
-        if not input_mapping:
-            # 如果没有配置 input_mapping，使用 args 作为默认输入
-            args = self.config.get("args", {})
-            return self._render_args(args, state)
+        # 优先使用 tool_inputs（前端配置）
+        tool_inputs = self.config.get("tool_inputs", {})
+        if tool_inputs:
+            # 渲染 tool_inputs 中的变量引用
+            for param_name, value in tool_inputs.items():
+                if isinstance(value, str) and value.startswith("${"):
+                    # 解析变量引用 ${node_id.output}
+                    rendered_value = self._resolve_variable_reference(value, state)
+                    input_data[param_name] = rendered_value
+                else:
+                    input_data[param_name] = value
+            logger.info(f"ToolNode _build_input_data from tool_inputs: {input_data}")
+            return input_data
 
-        for param_name, source_path in input_mapping.items():
-            value = self._get_value_by_path(state, source_path)
-            if value is not None:
-                input_data[param_name] = value
+        # 其次使用 input_mapping
+        input_mapping = self.config.get("input_mapping", {})
+        if input_mapping:
+            for param_name, source_path in input_mapping.items():
+                value = self._get_value_by_path(state, source_path)
+                if value is not None:
+                    input_data[param_name] = value
+            logger.info(f"ToolNode _build_input_data from input_mapping: {input_data}")
+            return input_data
+
+        # 最后使用 args（兼容旧格式）
+        args = self.config.get("args", {})
+        if args:
+            rendered_args = self._render_args(args, state)
+            logger.info(f"ToolNode _build_input_data from args: {rendered_args}")
+            return rendered_args
 
         return input_data
+
+    def _resolve_variable_reference(self, expression: str, state: Dict[str, Any]) -> Any:
+        """解析变量引用表达式
+
+        支持 ${node_id.output} 格式的变量引用
+
+        Args:
+            expression: 变量引用表达式（如 "${llm-1.result}"）
+            state: 工作流状态
+
+        Returns:
+            解析后的值
+        """
+        import re
+
+        # 变量引用模式: ${variable_name} 或 ${node_id.output_key}
+        match = re.match(r'\$\{([^}]+)\}', expression)
+        if not match:
+            return expression
+
+        var_path = match.group(1)
+        parts = var_path.split('.', 1)
+
+        if len(parts) == 1:
+            # 简单变量名，从输入变量获取
+            variables = state.get("variables", {})
+            return variables.get(parts[0])
+        else:
+            # 节点输出引用: ${node_id.output_key}
+            node_id, output_key = parts
+            node_outputs = state.get("node_outputs", {})
+            node_output = node_outputs.get(node_id, {})
+            return node_output.get(output_key)
 
     def _get_value_by_path(self, data: Dict[str, Any], path: str) -> Any:
         """根据路径从数据中获取值

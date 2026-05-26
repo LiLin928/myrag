@@ -9,7 +9,7 @@
 
 import os
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 import logging
 
@@ -44,6 +44,27 @@ class EmbeddingModelConfig(BaseModel):
     # 缓存配置
     enable_cache: bool = Field(default=True, description="是否启用缓存")
     cache_ttl: int = Field(default=3600, description="缓存过期时间（秒）")
+
+    @field_validator('provider', mode='before')
+    @classmethod
+    def normalize_provider(cls, v):
+        """标准化 provider 值（大小写不敏感）"""
+        if isinstance(v, str):
+            v_lower = v.lower()
+            # 支持常见的大小写变体
+            provider_map = {
+                'openai': 'openai',
+                'deepseek': 'deepseek',
+                'ollama': 'ollama',
+                'bge': 'bge',
+                'custom': 'custom',
+                'Custom': 'custom',
+                'OpenAI': 'openai',
+                'DeepSeek': 'deepseek',
+                'Ollama': 'ollama',
+            }
+            return provider_map.get(v, v_lower)
+        return v
 
     def get_api_url(self) -> str:
         """获取 API URL

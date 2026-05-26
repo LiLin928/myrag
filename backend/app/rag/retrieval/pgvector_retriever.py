@@ -10,9 +10,12 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
+import logging
 
-from app.rag.embedding.embedding_service import get_embedding_service
+from app.rag.embedding.embedding_service import get_embedding_service, create_embedding_service
 from app.db import get_db
+
+logger = logging.getLogger(__name__)
 
 
 class PGVectorRetriever:
@@ -28,6 +31,8 @@ class PGVectorRetriever:
         self,
         knowledge_base_id: Optional[str] = None,  # 知识库 ID（推荐）
         project_id: Optional[int] = None,         # 项目 ID（向后兼容）
+        embedding_model: Optional[str] = None,    # embedding 模型名称
+        embedding_config: Optional[Any] = None,   # embedding 配置对象
         top_k: int = 5,
         score_threshold: float = 0.0,
         dimension: int = 1536,
@@ -37,6 +42,8 @@ class PGVectorRetriever:
         Args:
             knowledge_base_id: 知识库 ID（推荐使用）
             project_id: 项目 ID（向后兼容，已弃用）
+            embedding_model: embedding 模型名称（如 text-embedding-3-small）
+            embedding_config: EmbeddingModelConfig 对象（完整配置）
             top_k: 返回结果数量
             score_threshold: 相似度阈值
             dimension: 向量维度
@@ -51,6 +58,8 @@ class PGVectorRetriever:
 
         self.project_id = project_id
         self.knowledge_base_id = knowledge_base_id
+        self.embedding_model = embedding_model
+        self.embedding_config = embedding_config
         self.top_k = top_k
         self.score_threshold = score_threshold
         self.dimension = dimension
@@ -85,8 +94,16 @@ class PGVectorRetriever:
         top_k = top_k or self.top_k
         score_threshold = score_threshold or self.score_threshold
 
-        # 嵌入查询文本
-        embedding_service = get_embedding_service()
+        # 嵌入查询文本 - 使用指定的 embedding 配置
+        if self.embedding_config:
+            logger.info(f"Using embedding config: model={self.embedding_config.model_name}, api_base={self.embedding_config.api_base}")
+            from app.rag.embedding.embedding_service import EmbeddingService
+            embedding_service = EmbeddingService(config=self.embedding_config)
+        elif self.embedding_model:
+            logger.info(f"Using embedding model: {self.embedding_model}")
+            embedding_service = create_embedding_service(model_name=self.embedding_model)
+        else:
+            embedding_service = get_embedding_service()
         query_embedding = await embedding_service.embed_text(query)
 
         # 构建查询
@@ -132,7 +149,11 @@ class PGVectorRetriever:
             "top_k": top_k,
         }
 
-        if self.project_id:
+        # 优先使用 knowledge_base_id（UUID 格式），其次使用 project_id
+        if self.knowledge_base_id:
+            filter_clauses.append("dc.knowledge_base_id = :knowledge_base_id")
+            params["knowledge_base_id"] = self.knowledge_base_id
+        elif self.project_id:
             filter_clauses.append("dc.project_id = :project_id")
             params["project_id"] = self.project_id
 
@@ -157,7 +178,7 @@ class PGVectorRetriever:
         # 构建完整 WHERE 子句
         where_clause = " AND ".join(filter_clauses) if filter_clauses else "TRUE"
 
-        # 构建查询 SQL
+        # 构建查询 SQL - 使用 CAST 代替 :: 类型转换，避免参数绑定冲突
         query_sql = text(f"""
             SELECT
                 dc.id,
@@ -168,11 +189,11 @@ class PGVectorRetriever:
                 dc.page_number,
                 dc.document_id,
                 dc.chunk_metadata,
-                1 - (dc.embedding_vector <=> :embedding::vector) as score
+                1 - (dc.embedding_vector <=> CAST(:embedding AS vector)) as score
             FROM document_chunks dc
             WHERE dc.embedding_vector IS NOT NULL
                 AND {where_clause}
-            ORDER BY dc.embedding_vector <=> :embedding::vector
+            ORDER BY dc.embedding_vector <=> CAST(:embedding AS vector)
             LIMIT :top_k
         """)
 

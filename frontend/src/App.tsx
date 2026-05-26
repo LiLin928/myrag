@@ -67,7 +67,7 @@ function WorkflowRoutes() {
       <Route index element={<WorkflowList />} />
       <Route path="history" element={<WorkflowHistory />} />
       <Route path="templates" element={<WorkflowTemplates />} />
-      <Route path="new" element={<WorkflowEditor />} />
+      {/* 移除单独的 new 路由，让新建模式也通过 :id 参数传递 */}
       <Route path=":id" element={<WorkflowEditor />} />
       <Route path=":id/execute" element={<WorkflowExecute />} />
     </Routes>

@@ -5,16 +5,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from typing import Dict, Any, Optional
 from datetime import datetime as dt
+from pydantic import BaseModel
 import uuid
 
 from app.api.dependencies.auth import get_current_user
 from app.models.user import User
-from app.workflow.models.workflow import Workflow, WorkflowStatus
-from app.workflow.models.execution import WorkflowExecution, ExecutionStatus
+from app.workflow.models.workflow import Workflow
+from app.workflow.models.execution import WorkflowExecution
 from app.workflow.engine.workflow_engine import workflow_engine
 from app.db import get_db
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+
+class WorkflowUpdateRequest(BaseModel):
+    """更新工作流请求"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    definition: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
 
 
 @router.post("/")
@@ -40,7 +49,7 @@ async def create_workflow(
         description=description,
         definition=definition,
         user_id=current_user.id,
-        status=WorkflowStatus.DRAFT,
+        status="draft",  # 使用字符串值
     )
 
     db.add(workflow)
@@ -50,8 +59,106 @@ async def create_workflow(
     return {
         "id": str(workflow.id),
         "name": workflow.name,
-        "status": workflow.status,
+        "description": workflow.description,
+        "definition": workflow.definition,
+        "status": workflow.status,  # 直接返回字符串
+        "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
     }
+
+
+@router.get("/{workflow_id}")
+async def get_workflow(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取工作流详情"""
+    result = await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    return {
+        "id": str(workflow.id),
+        "name": workflow.name,
+        "description": workflow.description,
+        "status": workflow.status,
+        "definition": workflow.definition,
+        "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
+        "updated_at": workflow.updated_at.isoformat() if workflow.updated_at else None,
+    }
+
+
+@router.put("/{workflow_id}")
+async def update_workflow(
+    workflow_id: str,
+    data: WorkflowUpdateRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新工作流"""
+    result = await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    if workflow.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this workflow")
+
+    if data.name is not None:
+        workflow.name = data.name
+    if data.description is not None:
+        workflow.description = data.description
+    if data.definition is not None:
+        workflow.definition = data.definition
+    if data.status is not None:
+        # 验证状态值是否有效
+        valid_statuses = ["draft", "published", "archived"]
+        if data.status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status. Valid values: {valid_statuses}")
+        workflow.status = data.status
+
+    workflow.updated_at = dt.utcnow()
+    await db.commit()
+    await db.refresh(workflow)
+
+    return {
+        "id": str(workflow.id),
+        "name": workflow.name,
+        "description": workflow.description,
+        "status": workflow.status,
+        "definition": workflow.definition,
+    }
+
+
+@router.delete("/{workflow_id}")
+async def delete_workflow(
+    workflow_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除工作流"""
+    result = await db.execute(
+        select(Workflow).where(Workflow.id == workflow_id)
+    )
+    workflow = result.scalar_one_or_none()
+
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    if workflow.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this workflow")
+
+    await db.delete(workflow)
+    await db.commit()
+
+    return {"deleted": workflow_id}
 
 
 @router.get("/")
@@ -66,7 +173,13 @@ async def list_workflows(
     workflows = result.scalars().all()
 
     return [
-        {"id": str(w.id), "name": w.name, "status": w.status}
+        {
+            "id": str(w.id),
+            "name": w.name,
+            "description": w.description,
+            "status": w.status,
+            "created_at": w.created_at.isoformat() if w.created_at else None,
+        }
         for w in workflows
     ]
 
@@ -88,9 +201,8 @@ async def execute_workflow(
         执行信息
     """
     # 获取工作流
-    wf_uuid = uuid.UUID(workflow_id)
     result = await db.execute(
-        select(Workflow).where(Workflow.id == wf_uuid)
+        select(Workflow).where(Workflow.id == workflow_id)
     )
     workflow = result.scalar_one_or_none()
 
@@ -103,7 +215,7 @@ async def execute_workflow(
     execution = WorkflowExecution(
         workflow_id=workflow.id,
         user_id=current_user.id,
-        status=ExecutionStatus.PENDING,
+        status="pending",
         thread_id=thread_id,
         variables=initial_variables,
     )
@@ -133,10 +245,10 @@ async def execute_workflow(
 
         # 更新执行状态
         if result.get("error"):
-            execution.status = ExecutionStatus.FAILED
+            execution.status = "failed"
             execution.error_message = result.get("error")
         else:
-            execution.status = ExecutionStatus.RUNNING
+            execution.status = "running"
 
         execution.current_node = result.get("current_node")
         execution.node_outputs = result.get("node_outputs")
@@ -148,10 +260,13 @@ async def execute_workflow(
             "execution_id": str(execution.id),
             "thread_id": thread_id,
             "status": execution.status,
+            "error": result.get("error"),
+            "node_outputs": result.get("node_outputs"),
+            "current_node": result.get("current_node"),
         }
 
     except Exception as e:
-        execution.status = ExecutionStatus.FAILED
+        execution.status = "failed"
         execution.error_message = str(e)
         await db.commit()
 
@@ -175,9 +290,8 @@ async def resume_workflow(
         执行结果
     """
     # 获取执行记录
-    exec_uuid = uuid.UUID(execution_id)
     result = await db.execute(
-        select(WorkflowExecution).where(WorkflowExecution.id == exec_uuid)
+        select(WorkflowExecution).where(WorkflowExecution.id == execution_id)
     )
     execution = result.scalar_one_or_none()
 
@@ -199,7 +313,7 @@ async def resume_workflow(
         )
 
         # 更新执行状态
-        execution.status = ExecutionStatus.COMPLETED
+        execution.status = "completed"
         execution.human_input = user_input
         execution.completed_at = dt.utcnow()
 
@@ -212,7 +326,7 @@ async def resume_workflow(
         }
 
     except Exception as e:
-        execution.status = ExecutionStatus.FAILED
+        execution.status = "failed"
         execution.error_message = str(e)
         await db.commit()
 
@@ -226,9 +340,8 @@ async def get_execution(
     current_user: User = Depends(get_current_user),
 ):
     """获取执行详情"""
-    exec_uuid = uuid.UUID(execution_id)
     result = await db.execute(
-        select(WorkflowExecution).where(WorkflowExecution.id == exec_uuid)
+        select(WorkflowExecution).where(WorkflowExecution.id == execution_id)
     )
     execution = result.scalar_one_or_none()
 
@@ -263,15 +376,16 @@ async def list_executions(
 
     if workflow_id:
         try:
-            conditions.append(WorkflowExecution.workflow_id == uuid.UUID(workflow_id))
+            conditions.append(WorkflowExecution.workflow_id == workflow_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid workflow_id format")
 
     if status:
-        try:
-            conditions.append(WorkflowExecution.status == ExecutionStatus(status))
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status value. Valid values: {[s.value for s in ExecutionStatus]}")
+        # 验证状态值是否有效
+        valid_statuses = ["pending", "running", "paused", "completed", "failed", "cancelled"]
+        if status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status value. Valid values: {valid_statuses}")
+        conditions.append(WorkflowExecution.status == status)
 
     if start_date:
         try:
@@ -312,7 +426,7 @@ async def list_executions(
             "id": str(execution.id),
             "workflow_id": str(execution.workflow_id),
             "workflow_name": workflow_name,
-            "status": execution.status.value,
+            "status": execution.status,
             "started_at": execution.started_at.isoformat() if execution.started_at else None,
             "completed_at": execution.completed_at.isoformat() if execution.completed_at else None,
             "duration_ms": duration_ms,
@@ -335,15 +449,10 @@ async def delete_execution(
     current_user: User = Depends(get_current_user),
 ):
     """删除执行记录"""
-    try:
-        exec_uuid = uuid.UUID(execution_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid execution_id format")
-
     result = await db.execute(
         select(WorkflowExecution).where(
             and_(
-                WorkflowExecution.id == exec_uuid,
+                WorkflowExecution.id == execution_id,
                 WorkflowExecution.user_id == current_user.id,
             )
         )
@@ -366,15 +475,10 @@ async def rerun_execution(
     current_user: User = Depends(get_current_user),
 ):
     """重新执行工作流（使用相同输入参数）"""
-    try:
-        exec_uuid = uuid.UUID(execution_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid execution_id format")
-
     result = await db.execute(
         select(WorkflowExecution).where(
             and_(
-                WorkflowExecution.id == exec_uuid,
+                WorkflowExecution.id == execution_id,
                 WorkflowExecution.user_id == current_user.id,
             )
         )
@@ -398,7 +502,7 @@ async def rerun_execution(
     new_execution = WorkflowExecution(
         workflow_id=workflow.id,
         user_id=current_user.id,
-        status=ExecutionStatus.PENDING,
+        status="pending",
         thread_id=new_thread_id,
         variables=execution.variables,  # 使用原执行的输入变量
     )

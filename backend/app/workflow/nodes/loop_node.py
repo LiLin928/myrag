@@ -7,7 +7,7 @@
 
 from typing import Dict, Any, List, Optional
 from app.workflow.nodes.base_node import BaseNode, NodeResult
-from app.workflow.langfuse_tracker import create_span, end_span
+from app.workflow.langfuse_tracker import create_span_direct, end_span
 from app.config import get_settings
 import logging
 
@@ -375,7 +375,7 @@ class LoopNode(BaseNode):
         span = None
         if settings.langfuse_available:
             input_array = self._resolve_array_reference(state) if loop_type == "array" else None
-            span = create_span(
+            span = create_span_direct(
                 trace_id=state.get("execution_id"),
                 node_type=self.node_type,
                 node_name=self.node_id,

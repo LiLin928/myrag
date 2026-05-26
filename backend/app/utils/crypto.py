@@ -8,10 +8,14 @@ import os
 import base64
 import hashlib
 import logging
+from dotenv import load_dotenv
+
+# 确保加载 .env 文件
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# 从环境变量获取加密密钥，若无则生成临时密钥
+# 从环境变量获取加密密钥
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 
 
