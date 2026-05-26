@@ -958,40 +958,149 @@ function ToolInputFieldWithSelector({ field, upstreamOutputs }: ToolInputFieldPr
 // ============================================================================
 
 function ConditionConfigSection() {
+  const upstreamOutputs = useContext(UpstreamOutputsContext)
+  const downstreamNodes = useContext(DownstreamNodesContext)
+  const form = Form.useFormInstance()
+
   return (
     <Collapse defaultActiveKey={['condition']} style={{ marginBottom: 16 }}>
       <Collapse.Panel header="条件配置" key="condition">
+        {upstreamOutputs.length > 0 ? (
+          <Alert
+            message="提示：选择上游节点输出作为条件变量，并选择连接的下游节点作为目标"
+            type="info"
+            style={{ marginBottom: 12, fontSize: 12 }}
+          />
+        ) : (
+          <Alert
+            message="请先连接上游节点以选择条件变量"
+            type="warning"
+            style={{ marginBottom: 16 }}
+          />
+        )}
+
         <Form.List name="conditions">
           {(fields, { add, remove }) => (
             <>
               {fields.map(({ key, name, ...restField }) => (
-                <Space key={key} style={{ display: 'flex', marginBottom: 8 }} align="baseline">
+                <div key={key} style={{ marginBottom: 16, padding: 12, background: '#fafafa', borderRadius: 4, border: '1px solid #d9d9d9' }}>
+                  <div style={{ fontWeight: 500, marginBottom: 8 }}>条件分支 {name + 1}</div>
+
+                  {/* 条件变量来源 */}
                   <Form.Item
                     {...restField}
-                    name={[name, 'expression']}
-                    rules={[{ required: true, message: '请输入条件表达式' }]}
-                    style={{ flex: 1 }}
+                    name={[name, 'variable_source']}
+                    label="条件变量"
+                    rules={[{ required: true, message: '请选择条件变量' }]}
                   >
-                    <Input placeholder="例如: ${result} == 'success'" />
+                    <Select
+                      placeholder="选择上游节点输出"
+                      showSearch
+                      optionFilterProp="label"
+                      options={upstreamOutputs.map((p) => ({
+                        value: p.path,
+                        label: p.name,
+                      }))}
+                      allowClear
+                    />
                   </Form.Item>
+
+                  {/* 比较操作符 */}
+                  <Form.Item
+                    {...restField}
+                    name={[name, 'operator']}
+                    label="比较操作"
+                    rules={[{ required: true, message: '请选择比较操作' }]}
+                  >
+                    <Select
+                      placeholder="选择比较操作符"
+                      options={[
+                        { value: 'eq', label: '等于 (==)' },
+                        { value: 'ne', label: '不等于 (!=)' },
+                        { value: 'gt', label: '大于 (>)' },
+                        { value: 'gte', label: '大于等于 (>=)' },
+                        { value: 'lt', label: '小于 (<)' },
+                        { value: 'lte', label: '小于等于 (<=)' },
+                        { value: 'contains', label: '包含' },
+                        { value: 'starts_with', label: '开头是' },
+                        { value: 'ends_with', label: '结尾是' },
+                        { value: 'exists', label: '存在' },
+                        { value: 'not_exists', label: '不存在' },
+                      ]}
+                    />
+                  </Form.Item>
+
+                  {/* 比较值 */}
+                  <Form.Item
+                    {...restField}
+                    name={[name, 'compare_value']}
+                    label="比较值"
+                    rules={[{ required: true, message: '请输入比较值' }]}
+                  >
+                    <Input placeholder="输入要比较的值" />
+                  </Form.Item>
+
+                  {/* 目标节点选择 */}
                   <Form.Item
                     {...restField}
                     name={[name, 'target_node']}
-                    style={{ width: 150 }}
+                    label="目标节点"
+                    rules={[{ required: true, message: '请选择目标节点' }]}
                   >
-                    <Input placeholder="目标节点 ID" />
+                    <Select
+                      placeholder="选择连接的下游节点"
+                      showSearch
+                      optionFilterProp="label"
+                      options={downstreamNodes.map((n) => ({
+                        value: n.id,
+                        label: `${n.name} (${nodeTypeNames[n.type] || n.type})`,
+                      }))}
+                      allowClear
+                    />
                   </Form.Item>
-                  <Button type="text" danger icon={<DeleteOutlined />} onClick={() => remove(name)} />
-                </Space>
+
+                  {/* 删除按钮 */}
+                  <Button
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => remove(name)}
+                    style={{ marginTop: 8 }}
+                  >
+                    删除此分支
+                  </Button>
+                </div>
               ))}
-              <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+              <Button
+                type="dashed"
+                onClick={() => add({
+                  variable_source: '',
+                  operator: 'eq',
+                  compare_value: '',
+                  target_node: '',
+                })}
+                block
+                icon={<PlusOutlined />}
+              >
                 添加条件分支
               </Button>
             </>
           )}
         </Form.List>
-        <Form.Item name="default_branch" label="默认分支" style={{ marginTop: 16 }}>
-          <Input placeholder="无条件匹配时执行的节点 ID" />
+
+        {/* 默认分支选择 */}
+        <Divider />
+        <Form.Item name="default_branch" label="默认分支（无匹配时执行）">
+          <Select
+            placeholder="选择默认执行的下游节点"
+            showSearch
+            optionFilterProp="label"
+            options={downstreamNodes.map((n) => ({
+              value: n.id,
+              label: `${n.name} (${nodeTypeNames[n.type] || n.type})`,
+            }))}
+            allowClear
+          />
         </Form.Item>
       </Collapse.Panel>
     </Collapse>
